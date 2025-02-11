@@ -6,7 +6,17 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <thread>
 #include <unistd.h>
+
+void handle_client_connection(int client_fd) {
+  int buffer[1024];
+  int result = read(client_fd, buffer, sizeof(buffer));
+  // Handle specifics here soon...
+
+  std::string res = "HTTP/1.1 200 OK\r\n\r\n";
+  send(client_fd, res.c_str(), res.length(), 0);
+}
 
 int main(int argc, char **argv) {
   std::cout << std::unitbuf;
@@ -47,10 +57,14 @@ int main(int argc, char **argv) {
 
   std::cout << "Waiting for a client to connect...\n";
 
-  accept(server_fd, (struct sockaddr *)&client_addr,
-         (socklen_t *)&client_addr_len);
+  int client = accept(server_fd, (struct sockaddr *)&client_addr,
+                      (socklen_t *)&client_addr_len);
+
   std::cout << "Client connected\n";
 
+  std::thread clientThread(handle_client_connection, client);
+
+  clientThread.join();
   close(server_fd);
 
   return 0;
