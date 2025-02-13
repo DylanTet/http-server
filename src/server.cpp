@@ -14,17 +14,30 @@
 #include <unordered_map>
 #include <vector>
 
-struct RequestHeaders {
-  std::string host;
-  std::string user_agent;
-  std::string accept;
-};
+std::string construct_http_response(const std::string &body) {
+  std::cout << body << '\n';
+  std::string response =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ";
+  response.append(std::to_string(body.length()));
+  response.append("\r\n\r\n");
+  response.append(body.data());
 
-bool check_if_path_exists(std::string_view path) {
-  if (path == "/")
-    return true;
-  else
-    return false;
+  return response;
+}
+
+void handle_path(int client_fd, std::string &path) {
+  if (path == "/") {
+    std::string exists = "HTTP/1.1 200 OK\r\n\r\n";
+    send(client_fd, exists.c_str(), exists.length(), 0);
+  }
+  if (path.find("echo") != std::string::npos) {
+    std::string echo_string = path.substr(6, std::string::npos);
+    std::string res = construct_http_response(echo_string);
+    send(client_fd, res.c_str(), res.length(), 0);
+  } else {
+    std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
+    send(client_fd, no_exist.c_str(), no_exist.length(), 0);
+  }
 }
 
 void handle_client_connection(int client_fd) {
@@ -61,15 +74,7 @@ void handle_client_connection(int client_fd) {
       }
     }
 
-    // Checking here at first to see if we know about this path passed
-    bool path_exists = check_if_path_exists(path);
-    if (path_exists) {
-      std::string exists = "HTTP/1.1 200 OK\r\n\r\n";
-      send(client_fd, exists.c_str(), exists.length(), 0);
-    } else {
-      std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
-      send(client_fd, no_exist.c_str(), no_exist.length(), 0);
-    }
+    handle_path(client_fd, path);
   }
 }
 
