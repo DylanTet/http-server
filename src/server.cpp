@@ -14,25 +14,36 @@
 #include <unordered_map>
 #include <vector>
 
-std::string construct_http_response(const std::string &body) {
-  std::cout << body << '\n';
+std::string construct_http_response(std::string &body) {
+  for (const auto &letter : body) {
+    std::cout << "LETTER: " << letter << '\n';
+  }
+
   std::string response =
       "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ";
-  response.append(std::to_string(body.length()));
+  response.append(std::to_string(body.size()));
   response.append("\r\n\r\n");
   response.append(body.data());
 
   return response;
 }
 
-void handle_path(int client_fd, std::string &path) {
+void handle_path(int client_fd, std::string &path,
+                 const std::unordered_map<std::string, std::string> &headers) {
   if (path == "/") {
     std::string exists = "HTTP/1.1 200 OK\r\n\r\n";
     send(client_fd, exists.c_str(), exists.length(), 0);
   }
   if (path.find("echo") != std::string::npos) {
+    // Gets rid of /echo/ from the path
     std::string echo_string = path.substr(6, std::string::npos);
     std::string res = construct_http_response(echo_string);
+    send(client_fd, res.c_str(), res.length(), 0);
+  }
+  if (path.find("user-agent") != std::string::npos) {
+    std::string agent = headers.find("User-Agent")->second;
+    std::cout << agent.length() << '\n';
+    std::string res = construct_http_response(agent);
     send(client_fd, res.c_str(), res.length(), 0);
   } else {
     std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
@@ -58,10 +69,10 @@ void handle_client_connection(int client_fd) {
 
     std::string line;
     std::unordered_map<std::string, std::string> headers;
-    while (std::getline(stream, line, '\r')) {
-      stream.get(); // consume \n
-      if (line.empty())
+    while (std::getline(stream, line)) {
+      if (line.empty()) {
         break; // Empty line marks end of headers
+      }
 
       // Find the colon separator
       size_t colon = line.find(':');
@@ -69,12 +80,13 @@ void handle_client_connection(int client_fd) {
         std::string key = line.substr(0, colon);
         // Skip the colon and any leading spaces
         std::string value = line.substr(colon + 1);
-        value = value.substr(value.find_first_not_of(" "));
+        value = value.substr(value.find_first_not_of(' '));
+        value.pop_back();
         headers[key] = value;
       }
     }
 
-    handle_path(client_fd, path);
+    handle_path(client_fd, path, headers);
   }
 }
 
