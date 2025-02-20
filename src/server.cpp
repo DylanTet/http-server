@@ -16,19 +16,21 @@
 #include <unordered_map>
 #include <vector>
 
-std::string construct_http_response(std::string &body) {
-  std::string response =
-      "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ";
-  response.append(std::to_string(body.size()));
+std::string construct_http_response(std::string &body,
+                                    std::string content_type) {
+  std::string response = "HTTP/1.1 200 OK\r\nContent-Type: ";
+  response.append(content_type + "\r\n");
+  response.append("Content-Length: " + std::to_string(body.size()));
   response.append("\r\n\r\n");
   response.append(body.data());
 
   return response;
 }
 std::string read_from_http_file(std::string_view file_path) {
-  std::ifstream file(file_path);
+  std::ifstream file(file_path.data());
   std::string file_content;
   std::getline(file, file_content, '\0');
+  std::cout << file_content << '\n';
   return file_content;
 }
 void handle_path(int client_fd, std::string &path,
@@ -41,21 +43,24 @@ void handle_path(int client_fd, std::string &path,
 
   if (path.find("echo") != std::string::npos) {
     std::string echo_string = path.substr(6, std::string::npos);
-    std::string res = construct_http_response(echo_string);
+    std::string res = construct_http_response(echo_string, "text/plain");
     send(client_fd, res.c_str(), res.length(), 0);
   }
 
   if (path.find("user-agent") != std::string::npos) {
     std::string agent = headers.find("User-Agent")->second;
-    std::string res = construct_http_response(agent);
+    std::string res = construct_http_response(agent, "text/plain");
     send(client_fd, res.c_str(), res.length(), 0);
   }
 
   if (path.find("files") != std::string::npos) {
-    std::string file_name = path.substr(path.find("files/"));
+    std::string file_name = path.erase(0, 7);
+    std::cout << "FILEPATH: " << http_files_path.data() + file_name << '\n';
     if (std::filesystem::exists(http_files_path.data() + file_name)) {
-      std::string http_file_content = read_from_http_file(http_files_path);
-      std::string res = construct_http_response(http_file_content);
+      std::string http_file_content =
+          read_from_http_file(http_files_path.data() + file_name);
+      std::string res = construct_http_response(http_file_content,
+                                                "application/octet-stream");
       send(client_fd, res.c_str(), res.length(), 0);
     } else {
       std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
@@ -69,7 +74,7 @@ void handle_path(int client_fd, std::string &path,
   }
 }
 
-void handle_client_connection(int client_fd) {
+void handle_client_connection(int client_fd, std::string_view http_dir_path) {
   std::string total_request;
 
   // Fill up our string with the total bytes from the request
@@ -103,7 +108,7 @@ void handle_client_connection(int client_fd) {
         headers[key] = value;
       }
     }
-    handle_path(client_fd, path, headers);
+    handle_path(client_fd, path, headers, http_dir_path);
   }
 }
 
@@ -112,8 +117,11 @@ int main(int argc, char **argv) {
   std::cerr << std::unitbuf;
 
   std::string dir_path;
-  if (argv[1] == "--directory") {
-    dir_path = argv[2];
+  for (int i = 0; i < argc; i++) {
+    if (std::string(argv[i]) == "--directory") {
+      dir_path = argv[i + 1];
+      std::cout << dir_path << '\n';
+    }
   }
 
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -157,7 +165,7 @@ int main(int argc, char **argv) {
                         (socklen_t *)&client_addr_len);
 
     std::cout << "Client connected\n";
-    client_threads.emplace_back(handle_client_connection, client);
+    client_threads.emplace_back(handle_client_connection, client, dir_path);
   }
 
   for (auto &thread : client_threads) {
