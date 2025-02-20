@@ -26,16 +26,23 @@ std::string construct_http_response(std::string &body,
 
   return response;
 }
+
 std::string read_from_http_file(std::string_view file_path) {
   std::ifstream file(file_path.data());
   std::string file_content;
   std::getline(file, file_content, '\0');
-  std::cout << file_content << '\n';
   return file_content;
 }
-void handle_path(int client_fd, std::string &path,
+
+int write_http_file(std::string_view file_path, std::string_view data) {
+  std::ofstream file(file_path.data());
+  file << data.data();
+  return sizeof(file);
+}
+
+void handle_path(int client_fd, std::string &path, std::string_view method,
                  const std::unordered_map<std::string, std::string> &headers,
-                 std::string_view http_files_path) {
+                 std::string_view http_files_path, std::string_view body) {
   if (path == "/") {
     std::string exists = "HTTP/1.1 200 OK\r\n\r\n";
     send(client_fd, exists.c_str(), exists.length(), 0);
@@ -55,16 +62,25 @@ void handle_path(int client_fd, std::string &path,
 
   if (path.find("files") != std::string::npos) {
     std::string file_name = path.erase(0, 7);
-    std::cout << "FILEPATH: " << http_files_path.data() + file_name << '\n';
-    if (std::filesystem::exists(http_files_path.data() + file_name)) {
-      std::string http_file_content =
-          read_from_http_file(http_files_path.data() + file_name);
-      std::string res = construct_http_response(http_file_content,
-                                                "application/octet-stream");
+
+    if (method == "GET") {
+      if (std::filesystem::exists(http_files_path.data() + file_name)) {
+        std::string http_file_content =
+            read_from_http_file(http_files_path.data() + file_name);
+        std::string res = construct_http_response(http_file_content,
+                                                  "application/octet-stream");
+        send(client_fd, res.c_str(), res.length(), 0);
+      } else {
+        std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
+        send(client_fd, no_exist.c_str(), no_exist.length(), 0);
+      }
+    }
+
+    if (method == "POST") {
+      std::string res = "HTTP/1.1 201 Created\r\n\r\n";
+      int total_written =
+          write_http_file(http_files_path.data() + file_name, body);
       send(client_fd, res.c_str(), res.length(), 0);
-    } else {
-      std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
-      send(client_fd, no_exist.c_str(), no_exist.length(), 0);
     }
   }
 
@@ -108,7 +124,13 @@ void handle_client_connection(int client_fd, std::string_view http_dir_path) {
         headers[key] = value;
       }
     }
-    handle_path(client_fd, path, headers, http_dir_path);
+
+    std::string body;
+    if (headers["Content-Type"] == "application/octet-stream") {
+      body = line;
+    }
+
+    handle_path(client_fd, path, method, headers, http_dir_path, body);
   }
 }
 
