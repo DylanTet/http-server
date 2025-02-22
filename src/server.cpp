@@ -14,16 +14,20 @@
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-std::string construct_http_response(std::string &body,
-                                    std::string content_type) {
-  std::string response = "HTTP/1.1 200 OK\r\nContent-Type: ";
-  response.append(content_type + "\r\n");
+std::string
+construct_http_response(std::string_view body,
+                        std::unordered_map<std::string, std::string> &headers) {
+  std::string response = "HTTP/1.1 200 OK\r\n";
+  std::cout << headers["Content-Type"] << '\n';
+  for (auto &header : headers) {
+    response.append(header.first + ": " + header.second + "\r\n");
+  }
   response.append("Content-Length: " + std::to_string(body.size()));
   response.append("\r\n\r\n");
   response.append(body.data());
-
   return response;
 }
 
@@ -40,35 +44,51 @@ int write_http_file(std::string_view file_path, std::string_view data) {
   return sizeof(file);
 }
 
-void handle_path(int client_fd, std::string &path, std::string_view method,
-                 const std::unordered_map<std::string, std::string> &headers,
-                 std::string_view http_files_path, std::string_view body) {
-  if (path == "/") {
+struct Request {
+  const std::string &method;
+  std::string &path;
+  const std::string &http_files_path;
+  const std::string &body;
+  const std::unordered_map<std::string, std::string> &headers;
+};
+
+void handle_path(int client_fd, Request request) {
+  if (request.path == "/") {
     std::string exists = "HTTP/1.1 200 OK\r\n\r\n";
     send(client_fd, exists.c_str(), exists.length(), 0);
-  }
+  } else if (request.path.find("echo") != std::string::npos) {
+    std::string echo_string = request.path.substr(6, std::string::npos);
+    std::unordered_map<std::string, std::string> res_headers;
+    res_headers.insert(std::make_pair("Content-Type", "text/plain"));
+    if (request.headers.find("Accept-Encoding") != request.headers.end() &&
+        request.headers.at("Accept-Encoding") == "gzip") {
+      res_headers.insert(std::make_pair("Content-Encoding", "gzip"));
+    }
 
-  if (path.find("echo") != std::string::npos) {
-    std::string echo_string = path.substr(6, std::string::npos);
-    std::string res = construct_http_response(echo_string, "text/plain");
+    std::string res = construct_http_response(echo_string, res_headers);
     send(client_fd, res.c_str(), res.length(), 0);
-  }
+  } else if (request.path.find("user-agent") != std::string::npos) {
+    std::string agent = request.headers.find("User-Agent")->second;
 
-  if (path.find("user-agent") != std::string::npos) {
-    std::string agent = headers.find("User-Agent")->second;
-    std::string res = construct_http_response(agent, "text/plain");
+    std::unordered_map<std::string, std::string> res_headers;
+    res_headers.insert(std::make_pair("Content-Type", "text/plain"));
+    std::string res = construct_http_response(agent, res_headers);
+
     send(client_fd, res.c_str(), res.length(), 0);
-  }
+  } else if (request.path.find("files") != std::string::npos) {
+    std::string file_name = request.path.erase(0, 7);
 
-  if (path.find("files") != std::string::npos) {
-    std::string file_name = path.erase(0, 7);
-
-    if (method == "GET") {
-      if (std::filesystem::exists(http_files_path.data() + file_name)) {
+    if (request.method == "GET") {
+      if (std::filesystem::exists(request.http_files_path + file_name)) {
         std::string http_file_content =
-            read_from_http_file(http_files_path.data() + file_name);
-        std::string res = construct_http_response(http_file_content,
-                                                  "application/octet-stream");
+            read_from_http_file(request.http_files_path + file_name);
+
+        std::unordered_map<std::string, std::string> res_headers;
+        res_headers.insert(
+            std::make_pair("Content-Type", "application/octet-stream"));
+        std::string res =
+            construct_http_response(http_file_content, res_headers);
+
         send(client_fd, res.c_str(), res.length(), 0);
       } else {
         std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
@@ -76,15 +96,13 @@ void handle_path(int client_fd, std::string &path, std::string_view method,
       }
     }
 
-    if (method == "POST") {
+    if (request.method == "POST") {
       std::string res = "HTTP/1.1 201 Created\r\n\r\n";
       int total_written =
-          write_http_file(http_files_path.data() + file_name, body);
+          write_http_file(request.http_files_path + file_name, request.body);
       send(client_fd, res.c_str(), res.length(), 0);
     }
-  }
-
-  else {
+  } else {
     std::string no_exist = "HTTP/1.1 404 Not Found\r\n\r\n";
     send(client_fd, no_exist.c_str(), no_exist.length(), 0);
   }
@@ -130,7 +148,9 @@ void handle_client_connection(int client_fd, std::string_view http_dir_path) {
       body = line;
     }
 
-    handle_path(client_fd, path, method, headers, http_dir_path, body);
+    Request request = {method, path, http_dir_path.data(), body, headers};
+
+    handle_path(client_fd, request);
   }
 }
 
